@@ -1,0 +1,7 @@
+venv
+output/
+23120260/
+23120245/
+__pycache__
+*.zip
+*.pdf
