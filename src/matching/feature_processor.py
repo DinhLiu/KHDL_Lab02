@@ -36,14 +36,19 @@ class FeatureProcessor:
         return text.split()
     
     @staticmethod
-    def extract_author_last_names(authors: List[str]) -> List[str]:
+    def extract_author_last_names(authors: List[str], max_authors: int = 50) -> List[str]:
         """Extract last names from author list"""
         last_names = []
-        for author in authors:
+        # Cap at max_authors to handle corrupted data
+        for author in authors[:max_authors]:
+            if not author or len(author) < 2:
+                continue
+            # Clean LaTeX artifacts
+            author = re.sub(r'[{}\\]', '', author).strip()
             if not author:
                 continue
-            parts = author.strip().split()
-            if parts:
+            parts = author.split()
+            if parts and len(parts[-1]) > 1:
                 last_names.append(parts[-1].lower())
         return last_names
     
@@ -118,12 +123,18 @@ class FeatureProcessor:
         # Feature 6: Year Match
         bib_year = bib.get('year') or FeatureProcessor.extract_year(bib.get('raw_content', ''))
         ref_year = ref.get('year', '')
-        features['year_match'] = 1.0 if bib_year == ref_year else 0.0
         
-        # Year difference
+        # Extract year from submission_date if needed (format: YYYY-MM-DD or YYYY)
+        if not ref_year and ref.get('submission_date'):
+            ref_year = ref.get('submission_date', '')[:4]
+        
+        features['year_match'] = 1.0 if (bib_year and ref_year and bib_year == ref_year) else 0.0
+        
+        # Year difference (capped at 50 to handle parsing errors)
         try:
             if bib_year and ref_year:
-                features['year_diff'] = abs(int(bib_year) - int(ref_year))
+                year_diff = abs(int(bib_year) - int(ref_year))
+                features['year_diff'] = min(year_diff, 50)  # Cap at 50 years
             else:
                 features['year_diff'] = 10
         except ValueError:
@@ -139,8 +150,9 @@ class FeatureProcessor:
         ref_arxiv_dot = ref_arxiv.replace('-', '.')
         features['arxiv_in_content'] = 1.0 if ref_arxiv_dot and ref_arxiv_dot in raw_content else 0.0
         
-        # Feature 9: Number of matching authors
-        features['num_matching_authors'] = len(set(bib_authors) & set(ref_authors))
+        # Feature 9: Number of matching authors (capped)
+        matching = set(bib_authors) & set(ref_authors)
+        features['num_matching_authors'] = min(len(matching), 20)  # Cap at 20
         
         # Feature 10: Title length ratio
         len_ratio = len(bib_title) / len(ref_title) if ref_title else 0
