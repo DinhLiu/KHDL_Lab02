@@ -92,8 +92,7 @@ class ParsingPipeline:
         self,
         data_folder: str,
         pub_id: str,
-        save_output: bool = True,
-        output_folder: str = "output"
+        save_output: bool = True
     ) -> ParsingResult:
         """
         Process a single publication through the parsing pipeline.
@@ -101,8 +100,7 @@ class ParsingPipeline:
         Args:
             data_folder: Name of the data folder (e.g., "23120260")
             pub_id: Publication ID (e.g., "2411-00222")
-            save_output: Whether to save output files
-            output_folder: Folder to save output files
+            save_output: Whether to save output files (saves to data folder)
             
         Returns:
             ParsingResult object with hierarchy and statistics
@@ -180,9 +178,9 @@ class ParsingPipeline:
             statistics['original_bibitems_count'] = len(all_bibitems)
             statistics['deduplicated_bibitems_count'] = len(dedup_bibitems)
             
-            # Save output if requested
+            # Save output if requested (directly to data folder)
             if save_output:
-                self._save_output(pub_id, main_hierarchy, dedup_bibitems, data_folder, output_folder)
+                self._save_output(pub_id, main_hierarchy, dedup_bibitems, data_folder)
             
             return ParsingResult(
                 pub_id=pub_id,
@@ -203,8 +201,7 @@ class ParsingPipeline:
         self,
         data_folder: str,
         limit: int = None,
-        save_output: bool = True,
-        output_folder: str = "output"
+        save_output: bool = True
     ) -> List[ParsingResult]:
         """
         Process all publications in a data folder.
@@ -212,8 +209,7 @@ class ParsingPipeline:
         Args:
             data_folder: Name of the data folder (e.g., "23120260")
             limit: Maximum number of publications to process (None = all)
-            save_output: Whether to save output files
-            output_folder: Folder to save output files
+            save_output: Whether to save output files (saves to data folder)
             
         Returns:
             List of ParsingResult objects
@@ -237,8 +233,7 @@ class ParsingPipeline:
             result = self.process_publication(
                 data_folder=data_folder,
                 pub_id=pub_id,
-                save_output=save_output,
-                output_folder=output_folder
+                save_output=save_output
             )
             
             if result.success:
@@ -331,12 +326,11 @@ class ParsingPipeline:
         pub_id: str,
         hierarchy: DocumentHierarchy,
         bibitems: List[Dict],
-        data_folder: str,
-        output_folder: str
+        data_folder: str
     ):
-        """Save parsing output to files."""
-        output_path = self.base_path / output_folder / data_folder / pub_id
-        output_path.mkdir(parents=True, exist_ok=True)
+        """Save parsing output directly to the data folder."""
+        # Save directly to data folder: 23120260/2411-00222/<pub_id>.json
+        output_path = self.base_path / data_folder / pub_id
         
         # Save in required format as <pub_id>.json
         hierarchy.save_output_format(output_path / f"{pub_id}.json")
@@ -433,7 +427,7 @@ if __name__ == "__main__":
     # Process a few publications as example
     print(f"\nProcessing publications from {DATA_FOLDER}...")
     results = pipeline.process_all(DATA_FOLDER
-                                   , limit=1000
+                                   #, limit=1000
                                    )
     
     summary = pipeline.get_summary(results)
