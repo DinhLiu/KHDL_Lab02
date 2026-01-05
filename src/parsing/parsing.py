@@ -5,6 +5,8 @@ import random
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
 
 from .file_gatherer import FileGatherer, GatheredPublication
 from .latex_parser import LaTeXParser, DocumentElement
@@ -90,8 +92,9 @@ class ParsingPipeline:
             return ParsingResult(pub_id=pub_id, success=False, error=str(e))
     
     def process_all(self, data_folder: str, limit: int = None, sample_size: int = None,
-                    random_seed: int = 42, manual_pubs: set = None, save_output: bool = True) -> List[ParsingResult]:
-        """Process all or sampled publications"""
+                    random_seed: int = 42, manual_pubs: set = None, save_output: bool = True,
+                    num_workers: int = None) -> List[ParsingResult]:
+        """Process all or sampled publications with parallel execution"""
         data_path = self.base_path / data_folder
         if not data_path.exists():
             return []
@@ -114,12 +117,27 @@ class ParsingPipeline:
         if limit:
             pub_dirs = pub_dirs[:limit]
         
-        results = []
-        for idx, pub_dir in enumerate(pub_dirs, 1):
-            print(f"[{idx}/{len(pub_dirs)}] {pub_dir.name}...", end=" ")
-            result = self.process_publication(data_folder, pub_dir.name, save_output)
-            print(f"({result.statistics.get('total_nodes', 0)} nodes)" if result.success else result.error)
-            results.append(result)
+        # Parallel processing with ThreadPoolExecutor
+        num_workers = num_workers or min(multiprocessing.cpu_count() * 2, 16)
+        print(f"Processing {len(pub_dirs)} publications with {num_workers} threads...")
+        
+        results = [None] * len(pub_dirs)
+        pub_ids = [d.name for d in pub_dirs]
+        
+        def process_one(idx_pubid):
+            idx, pub_id = idx_pubid
+            return idx, self.process_publication(data_folder, pub_id, save_output)
+        
+        from tqdm import tqdm
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(process_one, (i, pub_id)) for i, pub_id in enumerate(pub_ids)]
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Parsing"):
+                idx, result = future.result()
+                results[idx] = result
+        
+        # Print summary
+        success_count = sum(1 for r in results if r.success)
+        print(f"Completed: {success_count}/{len(results)} successful")
         
         return results
     
