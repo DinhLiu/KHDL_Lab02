@@ -187,18 +187,31 @@ def parse_all_publications(data_folder: str, base_path: str = None, limit: int =
 
 
 if __name__ == "__main__":
+    import shutil
+    
     BASE_PATH = Path(__file__).parent.parent.parent
     DATA_FOLDER = "23120260"
-    MANUAL_PUBS = {"2411-00222", "2411-00223", "2411-00225", "2411-00226", "2411-00227"}
-    SAMPLE_SIZE = 1500
     
     print("=" * 50)
-    print("Parsing Pipeline")
+    print("Parsing Pipeline - Processing ALL publications")
     print("=" * 50)
     
     pipeline = ParsingPipeline(base_path=BASE_PATH)
-    results = pipeline.process_all(DATA_FOLDER, sample_size=SAMPLE_SIZE, random_seed=42, manual_pubs=MANUAL_PUBS)
+    results = pipeline.process_all(DATA_FOLDER)
     summary = pipeline.get_summary(results)
     
     print(f"\nSummary: {summary['successful']}/{summary['total_publications']} successful")
     print(f"Bibitems: {summary['total_bibitems']}, Nodes: {summary['total_nodes']}")
+    
+    # Remove invalid folders
+    failed_pubs = [r.pub_id for r in results if not r.success]
+    if failed_pubs:
+        print(f"\nRemoving {len(failed_pubs)} invalid folders...")
+        data_path = BASE_PATH / DATA_FOLDER
+        removed = 0
+        for pub_id in failed_pubs:
+            folder_path = data_path / pub_id
+            if folder_path.exists():
+                shutil.rmtree(folder_path)
+                removed += 1
+        print(f"Removed {removed} folders")

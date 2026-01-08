@@ -58,6 +58,8 @@ class DocumentHierarchy:
                 'paragraphs': len([n for n in self.nodes.values() if n.node_type == 'paragraph']),
                 'figures': len([n for n in self.nodes.values() if n.node_type == 'figure']),
                 'equations': len([n for n in self.nodes.values() if n.node_type == 'equation']),
+                'lists': len([n for n in self.nodes.values() if n.node_type in ('itemize', 'enumerate', 'description')]),
+                'items': len([n for n in self.nodes.values() if n.node_type == 'item']),
             }
         }
     
@@ -173,6 +175,13 @@ class HierarchyBuilder:
         (r'\\begin\{algorithm\}(.*?)\\end\{algorithm\}', 'algorithm'),
     ]
     
+    # List environment patterns (handled separately for item extraction)
+    LIST_PATTERNS = [
+        (r'\\begin\{itemize\}(.*?)\\end\{itemize\}', 'itemize'),
+        (r'\\begin\{enumerate\}(.*?)\\end\{enumerate\}', 'enumerate'),
+        (r'\\begin\{description\}(.*?)\\end\{description\}', 'description'),
+    ]
+    
     # Reference section patterns to exclude
     REFERENCE_SECTION_PATTERNS = [
         r'references',
@@ -246,6 +255,9 @@ class HierarchyBuilder:
         
         # Extract special environments (figures, tables, equations)
         self._extract_environments(content, root_id)
+        
+        # Extract list environments (itemize, enumerate) with item children
+        self._extract_lists(content, root_id)
         
         return DocumentHierarchy(
             paper_id=paper_id,
@@ -480,6 +492,10 @@ class HierarchyBuilder:
         for pattern, _ in self.ENVIRONMENT_PATTERNS:
             clean_content = re.sub(pattern, '', clean_content, flags=re.DOTALL)
         
+        # Also remove list environments (they're handled by _extract_lists)
+        for pattern, _ in self.LIST_PATTERNS:
+            clean_content = re.sub(pattern, '', clean_content, flags=re.DOTALL)
+        
         # Remove thebibliography environment
         clean_content = re.sub(
             r'\\begin\{thebibliography\}.*?\\end\{thebibliography\}',
@@ -547,6 +563,102 @@ class HierarchyBuilder:
                         # Reference section goes to end
                         return True
         return False
+    
+    def _extract_items_from_list(self, list_content: str) -> List[str]:
+        """
+        Extract individual \item contents from a list environment.
+        
+        Args:
+            list_content: Content inside itemize/enumerate environment
+            
+        Returns:
+            List of item contents
+        """
+        items = []
+        
+        # Split by \item, handling optional arguments like \item[label]
+        # Pattern matches \item or \item[...]
+        item_pattern = r'\\item(?:\[[^\]]*\])?\s*'
+        
+        # Find all item positions
+        item_matches = list(re.finditer(item_pattern, list_content))
+        
+        for i, match in enumerate(item_matches):
+            start = match.end()
+            # End is either next \item or end of content
+            if i + 1 < len(item_matches):
+                end = item_matches[i + 1].start()
+            else:
+                end = len(list_content)
+            
+            item_content = list_content[start:end].strip()
+            
+            # Clean up the item content
+            item_content = re.sub(r'\s+', ' ', item_content)
+            
+            if item_content and len(item_content) > 3:
+                items.append(item_content)
+        
+        return items
+    
+    def _extract_lists(self, content: str, root_id: str):
+        """
+        Extract list environments (itemize, enumerate) with items as child nodes.
+        
+        Structure:
+        - List node (itemize/enumerate) as parent
+        - Each \item as a child node
+        """
+        for pattern, list_type in self.LIST_PATTERNS:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                # Skip if in reference section
+                if self._is_in_reference_section(content, match.start()):
+                    continue
+                
+                list_content = match.group(1).strip()
+                
+                # Skip empty lists
+                if not list_content or len(list_content) < 5:
+                    continue
+                
+                # Extract items
+                items = self._extract_items_from_list(list_content)
+                
+                # Skip if no valid items found
+                if not items:
+                    continue
+                
+                # Create list parent node
+                list_id = self._generate_id(list_type)
+                list_node = HierarchyNode(
+                    node_id=list_id,
+                    node_type=list_type,
+                    content=f"{list_type} ({len(items)} items)",
+                    level=5,
+                    hierarchy_path=[0],
+                    parent=root_id,
+                    metadata={'item_count': len(items)}
+                )
+                self.nodes[list_id] = list_node
+                self.nodes[root_id].children.append(list_id)
+                
+                # Create child nodes for each item
+                for idx, item_content in enumerate(items):
+                    item_id, is_new = self._get_or_create_node_id(item_content, 'item')
+                    
+                    if is_new:
+                        item_node = HierarchyNode(
+                            node_id=item_id,
+                            node_type='item',
+                            content=item_content,
+                            level=6,
+                            hierarchy_path=[0],
+                            parent=list_id,
+                            metadata={'item_index': idx + 1}
+                        )
+                        self.nodes[item_id] = item_node
+                    
+                    list_node.children.append(item_id)
     
     def _extract_environments(self, content: str, root_id: str):
         """Extract special environments (figures, tables, equations), excluding those in reference sections"""

@@ -35,21 +35,15 @@ class FileGatherer:
     Gathers all LaTeX source files from a publication directory.
     
     Handles:
-    - Multiple version directories (v1, v2, etc.)
-    - Nested file structures
-    - \input{} and \include{} commands
-    - .tex and .bib files
-    
-    Example usage:
-        gatherer = FileGatherer()
-        publication = gatherer.gather_publication(Path("23120260/2411-00222"))
-        if publication:
-            print(f"Found {len(publication.tex_files)} tex files")
+    + Multiple version directories (v1, v2, etc.)
+    + Nested file structures
+    + \input{} and \include{}
+    + .tex and .bib files
     """
     
     # Patterns to identify main tex file
     MAIN_FILE_PATTERNS = [
-        r'main\.tex',
+        r'main\.tex', # Use 'r' - raw string to avoid special ascii character like '\t', ...
         r'paper\.tex', 
         r'manuscript\.tex',
         r'article\.tex',
