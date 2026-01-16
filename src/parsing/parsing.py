@@ -358,7 +358,7 @@ if __name__ == "__main__":
         "2411-00227",  # train
     }
     
-    SAMPLE_SIZE = 995
+    SAMPLE_SIZE = 1495
     
     print("=" * 50)
     print(f"Parsing Pipeline - Sampling {SAMPLE_SIZE} publications")
