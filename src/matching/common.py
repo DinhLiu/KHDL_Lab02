@@ -286,66 +286,86 @@ class FeatureExtractor:
 # =============================================================================
 
 class ReferenceMatchingModel:
-    """Logistic regression model for reference matching"""
+    """Logistic regression model for reference matching using scikit-learn"""
     
     FEATURE_NAMES = FeatureExtractor.FEATURE_NAMES
     
     def __init__(self):
-        self.weights = None
-        self.bias = 0.0
+        self.model = None
+        self.scaler = None
     
-    def _sigmoid(self, x):
-        """Sigmoid activation function"""
-        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
-    
-    def train(self, X: np.ndarray, y: np.ndarray, lr: float = 0.1, epochs: int = 1000, verbose: bool = True):
-        """Train model using gradient descent"""
-        n_samples, n_features = X.shape
-        self.weights = np.zeros(n_features)
-        self.bias = 0.0
+    def train(self, X: np.ndarray, y: np.ndarray, C: float = 1.0, max_iter: int = 1000, verbose: bool = True):
+        """Train model using scikit-learn LogisticRegression"""
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
         
-        for epoch in range(epochs):
-            pred = self._sigmoid(np.dot(X, self.weights) + self.bias)
-            error = pred - y
-            self.weights -= lr * np.dot(X.T, error) / n_samples
-            self.bias -= lr * np.sum(error) / n_samples
-            
-            if verbose and epoch % 200 == 0:
-                loss = -np.mean(y * np.log(pred + 1e-10) + (1 - y) * np.log(1 - pred + 1e-10))
-                print(f"Epoch {epoch}, Loss: {loss:.4f}")
+        # Standardize features
+        self.scaler = StandardScaler()
+        X_scaled = self.scaler.fit_transform(X)
+        
+        # Train logistic regression
+        self.model = LogisticRegression(
+            C=C,
+            max_iter=max_iter,
+            solver='lbfgs',
+            class_weight='balanced',
+            random_state=42
+        )
+        self.model.fit(X_scaled, y)
+        
+        if verbose:
+            train_acc = self.model.score(X_scaled, y)
+            print(f"Training accuracy: {train_acc:.4f}")
     
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Predict probability of match"""
-        if self.weights is None:
-            # Default weights if not trained
-            self.weights = np.array([0.3, 0.2, 0.15, 0.25, 0.1, 0.15, -0.05, 1.0, 0.8, 0.1, 0.05, 0.0])
-        return self._sigmoid(np.dot(X, self.weights) + self.bias)
+        if self.model is None:
+            # Default behavior if not trained
+            return np.zeros(X.shape[0])
+        X_scaled = self.scaler.transform(X) if self.scaler else X
+        return self.model.predict_proba(X_scaled)[:, 1]
     
     def predict(self, X: np.ndarray, threshold: float = 0.5) -> np.ndarray:
         """Predict match (binary)"""
         return (self.predict_proba(X) >= threshold).astype(int)
     
     def get_feature_importance(self) -> Dict[str, float]:
-        """Get feature importance (absolute weights)"""
-        if self.weights is None:
+        """Get feature importance (absolute coefficients)"""
+        if self.model is None:
             return {}
-        return {name: abs(w) for name, w in zip(self.FEATURE_NAMES, self.weights)}
+        return {name: abs(w) for name, w in zip(self.FEATURE_NAMES, self.model.coef_[0])}
     
     def save(self, path: Path):
         """Save model to JSON file"""
         with open(path, 'w', encoding='utf-8') as f:
             json.dump({
-                'weights': self.weights.tolist() if self.weights is not None else None,
-                'bias': self.bias,
+                'weights': self.model.coef_[0].tolist() if self.model else None,
+                'bias': float(self.model.intercept_[0]) if self.model else 0.0,
+                'scaler_mean': self.scaler.mean_.tolist() if self.scaler else None,
+                'scaler_scale': self.scaler.scale_.tolist() if self.scaler else None,
                 'feature_names': self.FEATURE_NAMES
             }, f, indent=2)
     
     def load(self, path: Path):
         """Load model from JSON file"""
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+        
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        self.weights = np.array(data['weights']) if data['weights'] else None
-        self.bias = data['bias']
+        
+        if data['weights']:
+            self.model = LogisticRegression()
+            self.model.coef_ = np.array([data['weights']])
+            self.model.intercept_ = np.array([data['bias']])
+            self.model.classes_ = np.array([0, 1])
+            
+            if data.get('scaler_mean') and data.get('scaler_scale'):
+                self.scaler = StandardScaler()
+                self.scaler.mean_ = np.array(data['scaler_mean'])
+                self.scaler.scale_ = np.array(data['scaler_scale'])
+                self.scaler.var_ = self.scaler.scale_ ** 2
+                self.scaler.n_features_in_ = len(data['scaler_mean'])
     
     def rank_candidates(self, bib: Dict, refs: Dict[str, Dict], top_k: int = 5) -> List[Tuple[str, float]]:
         """Rank candidate references for a bibitem"""
