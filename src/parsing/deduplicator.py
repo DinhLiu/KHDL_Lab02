@@ -223,26 +223,88 @@ class ContentDeduplicator:
     Deduplicates content elements using content hashing.
     
     Used for full-text deduplication across versions.
+    Element IDs include the publication ID to identify which publication
+    the element belongs to.
+    
+    ID Format: {pub_id}_{type}_{counter}
+    Example: 2411-00230_sentence_0001
     
     Example usage:
-        dedup = ContentDeduplicator()
+        dedup = ContentDeduplicator(pub_id="2411-00230")
         
         # Get or create unique ID for content
         elem_id, is_new = dedup.get_or_create_id(content, "sentence")
+        # Returns: ("2411-00230_sentence_0001", True)
         
         # Check if content is duplicate
         if dedup.is_duplicate(content):
             print("Already seen this content")
     """
     
-    def __init__(self):
+    def __init__(self, pub_id: str = None):
+        self.pub_id = pub_id  # Publication ID (arXiv ID or Semantic Scholar ID)
         self.content_hashes: Dict[str, str] = {}  # hash -> element_id
         self.counter = 0
     
-    def get_hash(self, content: str) -> str:
-        """Get MD5 hash of content"""
+    def set_pub_id(self, pub_id: str):
+        """Set the publication ID for element naming"""
+        self.pub_id = pub_id
+    
+    def _normalize_for_dedup(self, content: str) -> str:
+        """
+        Normalize content for deduplication comparison.
+        
+        Removes minor formatting differences that shouldn't affect identity:
+        - Extra whitespace
+        - LaTeX formatting commands (bold, italic, etc.)
+        - Comments
+        
+        This ensures full-text matching works correctly after cleanup.
+        """
+        normalized = content
+        
+        # Remove LaTeX comments
+        normalized = re.sub(r'(?<!\\)%.*$', '', normalized, flags=re.MULTILINE)
+        
+        # Remove formatting commands but keep content
+        formatting_patterns = [
+            (r'\\textbf\{([^}]*)\}', r'\1'),
+            (r'\\textit\{([^}]*)\}', r'\1'),
+            (r'\\emph\{([^}]*)\}', r'\1'),
+            (r'\\underline\{([^}]*)\}', r'\1'),
+            (r'\\texttt\{([^}]*)\}', r'\1'),
+            (r'\\textrm\{([^}]*)\}', r'\1'),
+            (r'\{\\bf\s+([^}]*)\}', r'\1'),
+            (r'\{\\it\s+([^}]*)\}', r'\1'),
+            (r'\{\\em\s+([^}]*)\}', r'\1'),
+        ]
+        for pattern, replacement in formatting_patterns:
+            normalized = re.sub(pattern, replacement, normalized)
+        
+        # Remove spacing commands
+        spacing_patterns = [
+            r'\\centering\b', r'\\raggedright\b', r'\\raggedleft\b',
+            r'\\noindent\b', r'\\smallskip\b', r'\\medskip\b', r'\\bigskip\b',
+            r'\\vspace\*?\{[^}]*\}', r'\\hspace\*?\{[^}]*\}',
+            r'\\\\(?:\[[^\]]*\])?', r'\\par\b',
+        ]
+        for pattern in spacing_patterns:
+            normalized = re.sub(pattern, '', normalized)
+        
         # Normalize whitespace
-        normalized = re.sub(r'\s+', ' ', content).strip()
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized
+    
+    def get_hash(self, content: str) -> str:
+        """
+        Get MD5 hash of normalized content for deduplication.
+        
+        Content is normalized before hashing to ensure that elements
+        with identical semantic content (but minor formatting differences)
+        are identified as duplicates.
+        """
+        normalized = self._normalize_for_dedup(content)
         return hashlib.md5(normalized.encode('utf-8')).hexdigest()[:12]
     
     def get_or_create_id(self, content: str, prefix: str = "elem") -> Tuple[str, bool]:
@@ -251,10 +313,13 @@ class ContentDeduplicator:
         
         Args:
             content: Content to hash
-            prefix: Prefix for ID
+            prefix: Element type prefix (e.g., 'sentence', 'section')
             
         Returns:
             Tuple of (element_id, is_new)
+            
+        ID Format: {pub_id}_{prefix}_{counter:04d}
+        Example: 2411-00230_sentence_0001
         """
         content_hash = self.get_hash(content)
         
@@ -262,7 +327,13 @@ class ContentDeduplicator:
             return self.content_hashes[content_hash], False
         
         self.counter += 1
-        element_id = f"{prefix}_{self.counter:04d}"
+        
+        # Include publication ID in element ID
+        if self.pub_id:
+            element_id = f"{self.pub_id}_{prefix}_{self.counter:04d}"
+        else:
+            element_id = f"{prefix}_{self.counter:04d}"
+        
         self.content_hashes[content_hash] = element_id
         
         return element_id, True
@@ -283,21 +354,30 @@ class VersionedHierarchyDeduplicator:
     Handles deduplication across multiple versions of a document hierarchy.
     
     Merges hierarchies from different versions, identifying:
-    - Elements that are identical across versions
+    - Elements that are identical across versions (full-text match)
     - Elements that are unique to specific versions
     
+    Element IDs include the publication ID to identify which publication
+    the element belongs to:
+    - Format: {pub_id}_{type}_{counter}
+    - Example: 2411-00230_section_0001
+    
+    Elements from all versions are deduplicated: if an element's text content
+    matches exactly across versions, it is represented by a single id-string.
+    
     Example usage:
-        dedup = VersionedHierarchyDeduplicator()
+        dedup = VersionedHierarchyDeduplicator(pub_id="2411-00230")
         dedup.add_hierarchy(v1_hierarchy, "v1")
         dedup.add_hierarchy(v2_hierarchy, "v2")
         
         merged = dedup.get_merged_output()
     """
     
-    def __init__(self):
+    def __init__(self, pub_id: str = None):
+        self.pub_id = pub_id  # Publication ID (arXiv ID or Semantic Scholar ID)
         self.elements: Dict[str, Dict] = {}  # element_id -> {content, versions, ...}
         self.hierarchies: Dict[str, Dict] = {}  # version -> hierarchy mapping
-        self.content_dedup = ContentDeduplicator()
+        self.content_dedup = ContentDeduplicator(pub_id=pub_id)
     
     def add_hierarchy(self, hierarchy_data: Dict, version: str):
         """
@@ -313,8 +393,13 @@ class VersionedHierarchyDeduplicator:
         version_mapping = {}  # old_id -> new_id for this version
         
         for elem_id, content in elements.items():
+            # Extract element type from ID (format: {pub_id}_{type}_{counter})
+            # e.g., "2411-00222_section_0001" -> type is "section"
+            parts = elem_id.split('_')
+            elem_type = parts[-2] if len(parts) >= 3 else parts[0]
+            
             # Get or create deduplicated ID
-            new_id, is_new = self.content_dedup.get_or_create_id(content, elem_id.split('_')[0])
+            new_id, is_new = self.content_dedup.get_or_create_id(content, elem_type)
             version_mapping[elem_id] = new_id
             
             if is_new:
@@ -342,6 +427,8 @@ class VersionedHierarchyDeduplicator:
         
         Returns:
             Dict with 'elements' and 'hierarchy' for each version
+            - elements: {element_id: content}
+            - hierarchy: {version: {child_id: parent_id}}
         """
         # Build elements dict
         elements = {
@@ -356,9 +443,5 @@ class VersionedHierarchyDeduplicator:
         
         return {
             'elements': elements,
-            'hierarchy': hierarchy,
-            'element_versions': {
-                elem_id: list(data['versions'])
-                for elem_id, data in self.elements.items()
-            }
+            'hierarchy': hierarchy
         }

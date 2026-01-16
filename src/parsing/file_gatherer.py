@@ -186,11 +186,17 @@ class FileGatherer:
             for match in re.finditer(pattern, content):
                 filename = match.group(1).strip()
                 
+                # Normalize path separators (handle both / and \)
+                filename_normalized = filename.replace('/', '\\')
+                
                 # Try different path variations
                 variations = [
                     filename,
+                    filename_normalized,
                     filename + '.tex',
+                    filename_normalized + '.tex',
                     filename.replace('.tex', ''),
+                    filename_normalized.replace('.tex', ''),
                 ]
                 
                 for var in variations:
@@ -253,28 +259,53 @@ class FileGatherer:
         
         return publication.tex_files[0] if publication.tex_files else None
     
-    def merge_tex_content(self, publication: GatheredPublication) -> str:
+    def merge_tex_content(self, publication: GatheredPublication, version: str = None) -> str:
         r"""
         Merge all tex files into single content, resolving \input commands.
         
         Args:
             publication: GatheredPublication object
+            version: Specific version to merge (optional, defaults to latest main)
             
         Returns:
             Merged LaTeX content string
         """
-        main_file = self.find_main_file(publication)
+        # Filter by version if specified
+        if version:
+            version_files = [f for f in publication.tex_files if f.version == version]
+            main_file = next((f for f in version_files if f.file_type == 'main'), None)
+            if not main_file and version_files:
+                main_file = max(version_files, key=lambda f: len(f.content))
+        else:
+            main_file = self.find_main_file(publication)
+            version = main_file.version if main_file else None
+        
         if not main_file:
             return ""
         
         # Build file map for the same version
+        # Map by multiple path variations: relative path, filename, with/without .tex
         file_map = {}
+        version_dir = main_file.path.parent
+        
         for tex_file in publication.tex_files:
-            if tex_file.version == main_file.version:
-                # Map by filename (with and without .tex)
+            if tex_file.version == version:
+                # Try to get relative path from version directory
+                try:
+                    rel_path = tex_file.path.relative_to(version_dir)
+                    rel_str = str(rel_path).replace('\\', '/')
+                    file_map[rel_str] = tex_file.content
+                    # Also without .tex extension
+                    if rel_str.endswith('.tex'):
+                        file_map[rel_str[:-4]] = tex_file.content
+                except ValueError:
+                    pass
+                
+                # Also map by filename only (for backward compatibility)
                 name = tex_file.path.name
-                file_map[name] = tex_file.content
-                if name.endswith('.tex'):
+                if name not in file_map:
+                    file_map[name] = tex_file.content
+                if name.endswith('.tex') and name[:-4] not in file_map:
                     file_map[name[:-4]] = tex_file.content
         
         # Recursively resolve includes

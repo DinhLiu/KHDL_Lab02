@@ -394,6 +394,96 @@ class LaTeXParser:
         
         return '\n\n'.join(entries)
     
+    def extract_bibtex_entries(self, bib_content: str) -> List[Dict]:
+        """
+        Extract bibliography entries from BibTeX format (.bib files).
+        
+        Parses standard BibTeX entries like:
+            @article{key, author={...}, title={...}, ...}
+            @inproceedings{key, ...}
+            @misc{key, ...}
+        
+        Args:
+            bib_content: Content of a .bib file
+            
+        Returns:
+            List of dicts with same structure as extract_bibitems() for compatibility
+        """
+        entries = []
+        
+        # Pattern for BibTeX entry: @type{key, fields...}
+        # Handle nested braces in field values
+        entry_pattern = r'@(\w+)\s*\{([^,]+),\s*((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}'
+        
+        for match in re.finditer(entry_pattern, bib_content, re.DOTALL):
+            entry_type = match.group(1).lower()
+            key = match.group(2).strip()
+            fields_str = match.group(3)
+            
+            # Parse individual fields
+            bibtex = {
+                'type': entry_type,
+                'key': key,
+                'author': '',
+                'title': '',
+                'year': '',
+                'journal': '',
+                'booktitle': '',
+                'volume': '',
+                'number': '',
+                'pages': '',
+                'doi': '',
+                'arxiv': '',
+                'url': '',
+            }
+            
+            # Extract fields - handle both {value} and "value" formats
+            field_pattern = r'(\w+)\s*=\s*(?:\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}|"([^"]*)")'
+            
+            for field_match in re.finditer(field_pattern, fields_str, re.DOTALL):
+                field_name = field_match.group(1).lower()
+                # Value is either in group 2 (braces) or group 3 (quotes)
+                field_value = (field_match.group(2) or field_match.group(3) or '').strip()
+                
+                # Clean up the field value
+                field_value = re.sub(r'\s+', ' ', field_value)
+                field_value = field_value.strip()
+                
+                # Map field names
+                if field_name in bibtex:
+                    bibtex[field_name] = field_value
+                elif field_name == 'eprint':
+                    bibtex['arxiv'] = field_value
+                elif field_name == 'archiveprefix':
+                    pass  # Ignore, we know it's arXiv from eprint
+                elif field_name == 'primaryclass':
+                    pass  # Category, not needed
+            
+            # Build raw_content for compatibility with bibitem format
+            raw_parts = []
+            if bibtex['author']:
+                raw_parts.append(bibtex['author'])
+            if bibtex['title']:
+                raw_parts.append(bibtex['title'])
+            if bibtex['journal']:
+                raw_parts.append(bibtex['journal'])
+            elif bibtex['booktitle']:
+                raw_parts.append(bibtex['booktitle'])
+            if bibtex['year']:
+                raw_parts.append(bibtex['year'])
+            
+            raw_content = '. '.join(raw_parts)
+            
+            entries.append({
+                'key': key,
+                'label': '',  # BibTeX doesn't have labels like \bibitem[label]
+                'raw_content': raw_content,
+                'bibtex': bibtex,
+                'source': 'bibtex'  # Mark source for debugging
+            })
+        
+        return entries
+    
     def extract_figures(self, text: str) -> List[Dict]:
         """Extract figure environments"""
         figures = []

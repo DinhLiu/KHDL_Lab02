@@ -23,7 +23,8 @@ from typing import Dict, List, Set, Optional, Tuple
 
 # Base paths
 BASE_PATH = Path(__file__).parent.parent.parent  # KHDL_Lab02_v2
-DATA_DIR = BASE_PATH / "23120260"
+SOURCE_DATA_DIR = BASE_PATH / "23120260"  # Original data (read-only)
+DATA_DIR = BASE_PATH / "output" / "23120260"  # Processed data (parsing output)
 OUTPUT_DIR = BASE_PATH / "output"
 
 # Manual partition assignments

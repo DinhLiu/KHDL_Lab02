@@ -56,8 +56,9 @@ class DocumentHierarchy:
                 'sections': len([n for n in self.nodes.values() if n.node_type == 'section']),
                 'subsections': len([n for n in self.nodes.values() if n.node_type == 'subsection']),
                 'paragraphs': len([n for n in self.nodes.values() if n.node_type == 'paragraph']),
+                'sentences': len([n for n in self.nodes.values() if n.node_type == 'sentence']),
                 'figures': len([n for n in self.nodes.values() if n.node_type == 'figure']),
-                'equations': len([n for n in self.nodes.values() if n.node_type == 'equation']),
+                'formulas': len([n for n in self.nodes.values() if n.node_type == 'formula']),
                 'lists': len([n for n in self.nodes.values() if n.node_type in ('itemize', 'enumerate', 'description')]),
                 'items': len([n for n in self.nodes.values() if n.node_type == 'item']),
             }
@@ -161,19 +162,23 @@ class HierarchyBuilder:
     ]
     
     # Special environment patterns
+    # Note: Tables are treated as 'figure' type per specification
     ENVIRONMENT_PATTERNS = [
-        (r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}', 'equation'),
-        (r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}', 'equation'),
-        (r'\\begin\{gather\*?\}(.*?)\\end\{gather\*?\}', 'equation'),
-        (r'\\begin\{multline\*?\}(.*?)\\end\{multline\*?\}', 'equation'),
-        (r'\\begin\{eqnarray\*?\}(.*?)\\end\{eqnarray\*?\}', 'equation'),
+        (r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}', 'formula'),
+        (r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}', 'formula'),
+        (r'\\begin\{gather\*?\}(.*?)\\end\{gather\*?\}', 'formula'),
+        (r'\\begin\{multline\*?\}(.*?)\\end\{multline\*?\}', 'formula'),
+        (r'\\begin\{eqnarray\*?\}(.*?)\\end\{eqnarray\*?\}', 'formula'),
         (r'\\begin\{figure\*?\}(.*?)\\end\{figure\*?\}', 'figure'),
-        (r'\\begin\{table\*?\}(.*?)\\end\{table\*?\}', 'table'),
+        (r'\\begin\{table\*?\}(.*?)\\end\{table\*?\}', 'figure'),  # Tables are figures
         (r'\\begin\{theorem\}(.*?)\\end\{theorem\}', 'theorem'),
         (r'\\begin\{lemma\}(.*?)\\end\{lemma\}', 'lemma'),
         (r'\\begin\{proof\}(.*?)\\end\{proof\}', 'proof'),
         (r'\\begin\{algorithm\}(.*?)\\end\{algorithm\}', 'algorithm'),
     ]
+    
+    # Block formula patterns ($$...$$ style) - these are leaf nodes
+    BLOCK_FORMULA_PATTERN = r'\$\$(.+?)\$\$'
     
     # List environment patterns (handled separately for item extraction)
     LIST_PATTERNS = [
@@ -190,7 +195,8 @@ class HierarchyBuilder:
         r'literatur',
     ]
     
-    def __init__(self):
+    def __init__(self, pub_id: str = None):
+        self.pub_id = pub_id  # Publication ID for element naming
         self.node_counter = 0
         self.nodes: Dict[str, HierarchyNode] = {}
         self.section_counters = [0, 0, 0, 0, 0]  # For hierarchy numbering
@@ -198,8 +204,14 @@ class HierarchyBuilder:
         self.in_reference_section = False  # Track if currently in references
     
     def _generate_id(self, node_type: str = "node") -> str:
-        """Generate unique node ID"""
+        """Generate unique node ID with publication ID prefix.
+        
+        Format: {pub_id}_{type}_{counter:04d}
+        Example: 2411-00230_section_0001
+        """
         self.node_counter += 1
+        if self.pub_id:
+            return f"{self.pub_id}_{node_type}_{self.node_counter:04d}"
         return f"{node_type}_{self.node_counter:04d}"
     
     def _reset(self):
@@ -209,6 +221,7 @@ class HierarchyBuilder:
         self.section_counters = [0, 0, 0, 0, 0]
         self.content_hashes = {}
         self.in_reference_section = False
+        # Note: pub_id is NOT reset, it persists across builds
     
     def _increment_counter(self, level: int) -> List[int]:
         """Increment section counter and return hierarchy path"""
@@ -224,14 +237,36 @@ class HierarchyBuilder:
         """
         Build document hierarchy from LaTeX content.
         
+        Hierarchy Structure:
+        - Document (root)
+          - Title
+          - Abstract (with sentences as children)
+          - Sections (level 1)
+            - Subsections (level 2)
+              - Subsubsections (level 3)
+                - Paragraphs (level 4)
+                  - Leaf nodes: Sentences, Formulas, Figures
+                  - List environments (with items as children)
+        
+        Leaf nodes (smallest elements):
+        - Sentences: Text separated by periods
+        - Formulas: Block math (equation environments, $$...$$)
+        - Figures: figure/table environments (tables treated as figures)
+        
+        Exclusions: Reference sections are not parsed
+        Inclusions: Acknowledgements, Appendices (including \\section*)
+        
         Args:
             content: LaTeX content string
-            paper_id: Paper identifier
+            paper_id: Paper identifier (arXiv ID or Semantic Scholar ID)
             
         Returns:
             DocumentHierarchy object
+            
+        Note: Element IDs will be formatted as {paper_id}_{type}_{counter}
         """
         self._reset()
+        self.pub_id = paper_id  # Set publication ID for element naming
         
         # Create root node
         root_id = self._generate_id("document")
@@ -247,17 +282,11 @@ class HierarchyBuilder:
         # Extract and add title
         self._extract_title(content, root_id)
         
-        # Extract and add abstract
+        # Extract and add abstract with sentence children
         self._extract_abstract(content, root_id)
         
-        # Parse main content with sections
-        self._parse_sections(content, root_id)
-        
-        # Extract special environments (figures, tables, equations)
-        self._extract_environments(content, root_id)
-        
-        # Extract list environments (itemize, enumerate) with item children
-        self._extract_lists(content, root_id)
+        # Parse main content: sections with leaf nodes properly nested
+        self._parse_sections_with_leaves(content, root_id)
         
         return DocumentHierarchy(
             paper_id=paper_id,
@@ -311,16 +340,74 @@ class HierarchyBuilder:
                 return True
         return False
     
+    def _normalize_for_dedup(self, content: str) -> str:
+        """
+        Normalize content for deduplication comparison.
+        
+        Removes minor formatting differences that shouldn't affect identity:
+        - Extra whitespace
+        - LaTeX formatting commands (bold, italic, etc.)
+        - Comments
+        """
+        normalized = content
+        
+        # Remove LaTeX comments
+        normalized = re.sub(r'(?<!\\)%.*$', '', normalized, flags=re.MULTILINE)
+        
+        # Remove formatting commands but keep content
+        formatting_patterns = [
+            (r'\\textbf\{([^}]*)\}', r'\1'),
+            (r'\\textit\{([^}]*)\}', r'\1'),
+            (r'\\emph\{([^}]*)\}', r'\1'),
+            (r'\\underline\{([^}]*)\}', r'\1'),
+            (r'\\texttt\{([^}]*)\}', r'\1'),
+            (r'\\textrm\{([^}]*)\}', r'\1'),
+            (r'\\textsf\{([^}]*)\}', r'\1'),
+            (r'\{\\bf\s+([^}]*)\}', r'\1'),
+            (r'\{\\it\s+([^}]*)\}', r'\1'),
+            (r'\{\\em\s+([^}]*)\}', r'\1'),
+        ]
+        for pattern, replacement in formatting_patterns:
+            normalized = re.sub(pattern, replacement, normalized)
+        
+        # Remove spacing commands
+        spacing_patterns = [
+            r'\\centering\b', r'\\raggedright\b', r'\\raggedleft\b',
+            r'\\noindent\b', r'\\smallskip\b', r'\\medskip\b', r'\\bigskip\b',
+            r'\\vspace\*?\{[^}]*\}', r'\\hspace\*?\{[^}]*\}',
+            r'\\\\(?:\[[^\]]*\])?', r'\\par\b',
+        ]
+        for pattern in spacing_patterns:
+            normalized = re.sub(pattern, '', normalized)
+        
+        # Normalize whitespace
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized
+    
     def _get_content_hash(self, content: str) -> str:
-        """Get hash of content for deduplication"""
-        return hashlib.md5(content.encode('utf-8')).hexdigest()[:12]
+        """
+        Get hash of content for deduplication.
+        
+        Content is normalized before hashing to ensure that elements
+        with identical semantic content (but minor formatting differences)
+        are identified as duplicates.
+        """
+        normalized = self._normalize_for_dedup(content)
+        return hashlib.md5(normalized.encode('utf-8')).hexdigest()[:12]
     
     def _get_or_create_node_id(self, content: str, node_type: str) -> Tuple[str, bool]:
         """
         Get existing node ID for duplicate content or create new one.
         
+        Uses content hash for deduplication - if content matches exactly
+        across versions, returns the same ID.
+        
         Returns:
             Tuple of (node_id, is_new)
+            
+        ID Format: {pub_id}_{type}_{counter:04d}
+        Example: 2411-00230_sentence_0001
         """
         content_hash = self._get_content_hash(content)
         
@@ -406,8 +493,16 @@ class HierarchyBuilder:
         
         return result
     
-    def _parse_sections(self, content: str, root_id: str):
-        """Parse sections and build hierarchy, excluding reference sections"""
+    def _parse_sections_with_leaves(self, content: str, root_id: str):
+        """
+        Parse sections and build hierarchy with proper nesting of leaf nodes.
+        
+        Leaf nodes (sentences, formulas, figures) are placed under their 
+        containing section, not under root.
+        
+        Exclusions: Reference sections
+        Inclusions: Acknowledgements, Appendices (\\section*)
+        """
         current_parents = {0: root_id}  # level -> current parent at that level
         
         # Find all section-level commands with their content boundaries
@@ -481,32 +576,182 @@ class HierarchyBuilder:
             # Update current parent at this level
             current_parents[level] = section_id
             
-            # Extract and add sentences from section content
+            # Extract leaf nodes from section content (placed under this section)
             section_content = content[section['end_position']:section['content_end']]
-            self._extract_sentences(section_content, section_id, level + 1)
+            self._extract_leaf_nodes(section_content, section_id, level + 1)
     
-    def _extract_sentences(self, content: str, parent_id: str, level: int):
-        """Extract sentences from content and add as leaf nodes"""
-        # Remove environments first (they're handled separately)
-        clean_content = content
-        for pattern, _ in self.ENVIRONMENT_PATTERNS:
-            clean_content = re.sub(pattern, '', clean_content, flags=re.DOTALL)
+    def _extract_leaf_nodes(self, content: str, parent_id: str, level: int):
+        """
+        Extract all leaf nodes from content and add under parent.
         
-        # Also remove list environments (they're handled by _extract_lists)
-        for pattern, _ in self.LIST_PATTERNS:
-            clean_content = re.sub(pattern, '', clean_content, flags=re.DOTALL)
+        Leaf nodes are:
+        - Sentences (text separated by periods)
+        - Block Formulas (equation environments, $$...$$)
+        - Figures (figure/table environments)
+        - List environments (with items as children)
+        """
+        # Track what we've processed to avoid duplicates
+        processed_ranges = []
         
-        # Remove thebibliography environment
+        # 1. Extract figures (including tables as figures)
+        figure_patterns = [
+            (r'\\begin\{figure\*?\}(.*?)\\end\{figure\*?\}', 'figure'),
+            (r'\\begin\{table\*?\}(.*?)\\end\{table\*?\}', 'figure'),  # Tables are figures
+        ]
+        for pattern, fig_type in figure_patterns:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                processed_ranges.append((match.start(), match.end()))
+                fig_content = match.group(1).strip()
+                
+                # Extract caption for display
+                caption = ""
+                caption_match = re.search(r'\\caption\{([^}]*)\}', fig_content)
+                if caption_match:
+                    caption = caption_match.group(1).strip()
+                
+                display_content = caption or fig_content[:200]
+                fig_id, is_new = self._get_or_create_node_id(display_content, fig_type)
+                
+                if is_new:
+                    fig_node = HierarchyNode(
+                        node_id=fig_id,
+                        node_type=fig_type,
+                        content=display_content,
+                        level=level,
+                        hierarchy_path=[0],
+                        parent=parent_id,
+                        metadata={'full_content': fig_content[:500]}
+                    )
+                    self.nodes[fig_id] = fig_node
+                
+                self.nodes[parent_id].children.append(fig_id)
+        
+        # 2. Extract block formulas (equation environments)
+        formula_patterns = [
+            r'\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}',
+            r'\\begin\{align\*?\}(.*?)\\end\{align\*?\}',
+            r'\\begin\{gather\*?\}(.*?)\\end\{gather\*?\}',
+            r'\\begin\{multline\*?\}(.*?)\\end\{multline\*?\}',
+            r'\\begin\{eqnarray\*?\}(.*?)\\end\{eqnarray\*?\}',
+        ]
+        for pattern in formula_patterns:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                processed_ranges.append((match.start(), match.end()))
+                formula_content = match.group(1).strip()
+                
+                formula_id, is_new = self._get_or_create_node_id(formula_content, 'formula')
+                
+                if is_new:
+                    formula_node = HierarchyNode(
+                        node_id=formula_id,
+                        node_type='formula',
+                        content=formula_content,
+                        level=level,
+                        hierarchy_path=[0],
+                        parent=parent_id
+                    )
+                    self.nodes[formula_id] = formula_node
+                
+                self.nodes[parent_id].children.append(formula_id)
+        
+        # 3. Extract $$...$$ block formulas
+        for match in re.finditer(self.BLOCK_FORMULA_PATTERN, content, re.DOTALL):
+            processed_ranges.append((match.start(), match.end()))
+            formula_content = match.group(1).strip()
+            
+            formula_id, is_new = self._get_or_create_node_id(formula_content, 'formula')
+            
+            if is_new:
+                formula_node = HierarchyNode(
+                    node_id=formula_id,
+                    node_type='formula',
+                    content=formula_content,
+                    level=level,
+                    hierarchy_path=[0],
+                    parent=parent_id
+                )
+                self.nodes[formula_id] = formula_node
+            
+            self.nodes[parent_id].children.append(formula_id)
+        
+        # 4. Extract list environments (itemize/enumerate) with items as children
+        for pattern, list_type in self.LIST_PATTERNS:
+            for match in re.finditer(pattern, content, re.DOTALL):
+                processed_ranges.append((match.start(), match.end()))
+                list_content = match.group(1).strip()
+                
+                if not list_content or len(list_content) < 5:
+                    continue
+                
+                # Extract items
+                items = self._extract_items_from_list(list_content)
+                if not items:
+                    continue
+                
+                # Create list parent node
+                list_id = self._generate_id(list_type)
+                list_node = HierarchyNode(
+                    node_id=list_id,
+                    node_type=list_type,
+                    content=f"{list_type} ({len(items)} items)",
+                    level=level,
+                    hierarchy_path=[0],
+                    parent=parent_id,
+                    metadata={'item_count': len(items)}
+                )
+                self.nodes[list_id] = list_node
+                self.nodes[parent_id].children.append(list_id)
+                
+                # Create child nodes for each item (items are leaf nodes)
+                for idx, item_content in enumerate(items):
+                    item_id, is_new = self._get_or_create_node_id(item_content, 'item')
+                    
+                    if is_new:
+                        item_node = HierarchyNode(
+                            node_id=item_id,
+                            node_type='item',
+                            content=item_content,
+                            level=level + 1,
+                            hierarchy_path=[0],
+                            parent=list_id,
+                            metadata={'item_index': idx + 1}
+                        )
+                        self.nodes[item_id] = item_node
+                    
+                    list_node.children.append(item_id)
+        
+        # 5. Extract sentences from remaining text (excluding processed ranges)
+        self._extract_sentences_from_text(content, parent_id, level, processed_ranges)
+    
+    def _extract_sentences_from_text(self, content: str, parent_id: str, level: int, 
+                                     exclude_ranges: List[Tuple[int, int]]):
+        """Extract sentences from text, excluding already processed ranges."""
+        # Sort ranges and merge overlapping
+        exclude_ranges = sorted(exclude_ranges, key=lambda x: x[0])
+        
+        # Build text from non-excluded ranges
+        text_parts = []
+        last_end = 0
+        for start, end in exclude_ranges:
+            if start > last_end:
+                text_parts.append(content[last_end:start])
+            last_end = max(last_end, end)
+        if last_end < len(content):
+            text_parts.append(content[last_end:])
+        
+        clean_content = ' '.join(text_parts)
+        
+        # Remove remaining environments and commands
         clean_content = re.sub(
             r'\\begin\{thebibliography\}.*?\\end\{thebibliography\}',
             '', clean_content, flags=re.DOTALL
         )
         
-        # Remove section commands (we just want the text content)
+        # Remove section commands
         for pattern, _, _ in self.SECTION_PATTERNS:
             clean_content = re.sub(pattern, '', clean_content)
         
-        # Clean up LaTeX commands that don't contribute to text
+        # Clean up LaTeX commands
         clean_content = re.sub(r'\\label\{[^}]*\}', '', clean_content)
         clean_content = re.sub(r'\\ref\{[^}]*\}', '[ref]', clean_content)
         clean_content = re.sub(r'\\cite[a-z]*\{[^}]*\}', '[cite]', clean_content)
@@ -514,19 +759,17 @@ class HierarchyBuilder:
         # Normalize whitespace
         clean_content = re.sub(r'\s+', ' ', clean_content).strip()
         
-        # Skip if too short
         if len(clean_content) < 20:
             return
         
         # Split into sentences
         sentences = self._split_into_sentences(clean_content)
         
-        # Add sentence nodes
+        # Add sentence nodes (leaf nodes)
         for sentence in sentences:
             if len(sentence) < 10:
                 continue
             
-            # Use deduplication
             sentence_id, is_new = self._get_or_create_node_id(sentence, 'sentence')
             
             if is_new:
@@ -542,31 +785,9 @@ class HierarchyBuilder:
             
             self.nodes[parent_id].children.append(sentence_id)
     
-    def _is_in_reference_section(self, content: str, position: int) -> bool:
-        """Check if a position in content is within a reference section"""
-        # Find all reference section starts
-        ref_patterns = [
-            r'\\section\*?\{(?:References|Bibliography|Works Cited)\}',
-            r'\\begin\{thebibliography\}',
-        ]
-        
-        for pattern in ref_patterns:
-            for match in re.finditer(pattern, content, re.IGNORECASE):
-                if match.start() < position:
-                    # Check if there's another section after the reference
-                    next_section = re.search(r'\\section\*?\{', content[match.end():])
-                    if next_section:
-                        ref_end = match.end() + next_section.start()
-                        if position < ref_end:
-                            return True
-                    else:
-                        # Reference section goes to end
-                        return True
-        return False
-    
     def _extract_items_from_list(self, list_content: str) -> List[str]:
         """
-        Extract individual \item contents from a list environment.
+        Extract individual \\item contents from a list environment.
         
         Args:
             list_content: Content inside itemize/enumerate environment
@@ -576,8 +797,8 @@ class HierarchyBuilder:
         """
         items = []
         
-        # Split by \item, handling optional arguments like \item[label]
-        # Pattern matches \item or \item[...]
+        # Split by \\item, handling optional arguments like \\item[label]
+        # Pattern matches \\item or \\item[...]
         item_pattern = r'\\item(?:\[[^\]]*\])?\s*'
         
         # Find all item positions
@@ -585,7 +806,7 @@ class HierarchyBuilder:
         
         for i, match in enumerate(item_matches):
             start = match.end()
-            # End is either next \item or end of content
+            # End is either next \\item or end of content
             if i + 1 < len(item_matches):
                 end = item_matches[i + 1].start()
             else:
@@ -600,104 +821,6 @@ class HierarchyBuilder:
                 items.append(item_content)
         
         return items
-    
-    def _extract_lists(self, content: str, root_id: str):
-        """
-        Extract list environments (itemize, enumerate) with items as child nodes.
-        
-        Structure:
-        - List node (itemize/enumerate) as parent
-        - Each \item as a child node
-        """
-        for pattern, list_type in self.LIST_PATTERNS:
-            for match in re.finditer(pattern, content, re.DOTALL):
-                # Skip if in reference section
-                if self._is_in_reference_section(content, match.start()):
-                    continue
-                
-                list_content = match.group(1).strip()
-                
-                # Skip empty lists
-                if not list_content or len(list_content) < 5:
-                    continue
-                
-                # Extract items
-                items = self._extract_items_from_list(list_content)
-                
-                # Skip if no valid items found
-                if not items:
-                    continue
-                
-                # Create list parent node
-                list_id = self._generate_id(list_type)
-                list_node = HierarchyNode(
-                    node_id=list_id,
-                    node_type=list_type,
-                    content=f"{list_type} ({len(items)} items)",
-                    level=5,
-                    hierarchy_path=[0],
-                    parent=root_id,
-                    metadata={'item_count': len(items)}
-                )
-                self.nodes[list_id] = list_node
-                self.nodes[root_id].children.append(list_id)
-                
-                # Create child nodes for each item
-                for idx, item_content in enumerate(items):
-                    item_id, is_new = self._get_or_create_node_id(item_content, 'item')
-                    
-                    if is_new:
-                        item_node = HierarchyNode(
-                            node_id=item_id,
-                            node_type='item',
-                            content=item_content,
-                            level=6,
-                            hierarchy_path=[0],
-                            parent=list_id,
-                            metadata={'item_index': idx + 1}
-                        )
-                        self.nodes[item_id] = item_node
-                    
-                    list_node.children.append(item_id)
-    
-    def _extract_environments(self, content: str, root_id: str):
-        """Extract special environments (figures, tables, equations), excluding those in reference sections"""
-        for pattern, env_type in self.ENVIRONMENT_PATTERNS:
-            for match in re.finditer(pattern, content, re.DOTALL):
-                # Skip if in reference section
-                if self._is_in_reference_section(content, match.start()):
-                    continue
-                
-                env_content = match.group(1).strip()
-                
-                # Extract caption if present
-                caption = ""
-                caption_match = re.search(r'\\caption\{([^}]*)\}', env_content)
-                if caption_match:
-                    caption = caption_match.group(1).strip()
-                
-                # Extract label if present
-                label = ""
-                label_match = re.search(r'\\label\{([^}]*)\}', env_content)
-                if label_match:
-                    label = label_match.group(1)
-                
-                # Use deduplication for environment content
-                display_content = caption or env_content[:200]
-                env_id, is_new = self._get_or_create_node_id(display_content, env_type)
-                
-                if is_new:
-                    env_node = HierarchyNode(
-                        node_id=env_id,
-                        node_type=env_type,
-                        content=display_content,
-                        level=5,
-                        hierarchy_path=[0],
-                        parent=root_id,
-                        metadata={'label': label, 'full_content': env_content[:500]}
-                    )
-                    self.nodes[env_id] = env_node
-                    self.nodes[root_id].children.append(env_id)
 
 
 def build_hierarchy_for_publication(pub_path: Path) -> Optional[DocumentHierarchy]:
