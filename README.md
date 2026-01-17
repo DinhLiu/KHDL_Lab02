@@ -36,13 +36,17 @@ KHDL_Lab02_v2/
 │   └── 2411-XXXXX/                 # Publication folders
 │       ├── tex/                    # LaTeX source files
 │       ├── references.json         # Candidate arXiv references
-│       ├── metadata.json           # Publication metadata
-│       └── pred.json               # Predictions (generated)
+│       └── metadata.json           # Publication metadata
+│       
 │
 ├── output/                         # Parsing output
 │   └── 23120260/
 │       └── 2411-XXXXX/
-│           └── <pub_id>.json       # Hierarchical document structure
+│           ├── hierarchy.json
+│           ├── refs.bib
+│           ├── metadata.json
+│           ├── references.json
+│           └── pred.json               # Predictions (generated)
 │
 └── README.md
 ```
@@ -225,31 +229,90 @@ $$MRR = \frac{1}{|Q|} \sum_{i=1}^{|Q|} \frac{1}{rank_i}$$
 
 ## Quick Start
 
+### 1. Environment Setup
+
 ```bash
-# 1. Set up environment
+# Clone or navigate to project directory
+cd KHDL_Lab02_v2
+
+# Create virtual environment
 python -m venv venv
-.\venv\Scripts\activate  # Windows
 
-# 2. Install dependencies
-pip install numpy jupyter
-
-# 3. Run parsing pipeline
-python -m src.parsing.parsing
-
-# 4. Run matching pipeline
-cd src/matching
-jupyter notebook
-# Execute notebooks 00 → 01 → 02 → 03 → 04
+# Activate virtual environment
+# Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+# Windows (Command Prompt):
+.\venv\Scripts\activate.bat
+# Linux/macOS:
+source venv/bin/activate
 ```
+
+### 2. Install Dependencies
+
+```bash
+# Install all required packages from requirements.txt
+pip install -r src/requirements.txt
+
+# Install Jupyter for running notebooks
+pip install jupyter
+```
+
+### 3. Run Parsing Pipeline
+
+```bash
+# From project root directory
+python -m src.parsing.parsing
+```
+
+This will:
+- Process all LaTeX publications in `23120260/`
+- Generate hierarchical JSON output in `output/23120260/`
+- Display parsing statistics
+
+### 4. Run Reference Matching Pipeline
+
+```bash
+# Navigate to matching directory
+cd src/matching
+
+# Start Jupyter Notebook
+jupyter notebook
+```
+
+Execute notebooks **in order**:
+
+| Step | Notebook | Purpose |
+|------|----------|---------|
+| 1 | `00_manual_labeling.ipynb` | Create manual ground truth labels |
+| 2 | `01_data_cleaning.ipynb` | Clean data + auto-label references |
+| 3 | `02_feature_engineering.ipynb` | Extract 12 matching features |
+| 4 | `03_model_training.ipynb` | Train logistic regression model |
+| 5 | `04_evaluation.ipynb` | Evaluate MRR@5 + generate `pred.json` |
+| 6 | `05_statistics_visualization.ipynb` | Visualize results (optional) |
 
 ---
 
 ## Requirements
 
-```
-Python 3.8+
-numpy
-jupyter
+### Python Version
+- Python 3.8 or higher
+
+### Dependencies (`src/requirements.txt`)
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `numpy` | ≥2.0.0 | Numerical computing |
+| `tqdm` | ≥4.60.0 | Progress bars |
+| `matplotlib` | latest | Visualization |
+| `scikit-learn` | latest | Machine learning (LogisticRegression) |
+
+### Additional Tools
+- `jupyter` - For running `.ipynb` notebooks
+
+### Install All Dependencies
+
+```bash
+pip install -r src/requirements.txt jupyter
 ```
 
 ---

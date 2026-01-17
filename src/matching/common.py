@@ -294,6 +294,20 @@ class ReferenceMatchingModel:
         self.model = None
         self.scaler = None
     
+    @property
+    def weights(self):
+        """Get model weights (coefficients) from the internal sklearn model"""
+        if self.model is not None and hasattr(self.model, 'coef_'):
+            return self.model.coef_[0]
+        return None
+    
+    @property
+    def bias(self):
+        """Get model bias (intercept) from the internal sklearn model"""
+        if self.model is not None and hasattr(self.model, 'intercept_'):
+            return self.model.intercept_[0]
+        return 0.0
+    
     def train(self, X: np.ndarray, y: np.ndarray, C: float = 1.0, max_iter: int = 1000, verbose: bool = True):
         """Train model using scikit-learn LogisticRegression"""
         from sklearn.linear_model import LogisticRegression

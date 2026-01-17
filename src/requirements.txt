@@ -3,3 +3,4 @@ tqdm>=4.60.0
 python-Levenshtein>=0.20.0
 ijson>=3.2.0
 matplotlib
+scikit-learn
